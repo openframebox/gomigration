@@ -2,6 +2,8 @@
 
 **GoMigration** is a lightweight and extensible database migration library for Go, designed with simplicity and flexibility in mind. It allows you to register migrations in Go code, manage them efficiently, and execute or roll them back in a safe and structured manner.
 
+> 📝 **Note**: This project is a fork of [ruangdeveloper/qafoia](https://github.com/ruangdeveloper/qafoia), moved under a new organization for long-term maintenance and development.
+
 ## ✨ Features
 
 - Register migrations using Go structs.
@@ -16,7 +18,7 @@
 To install GoMigration, use the following command:
 
 ```bash
-go get github.com/ruangdeveloper/gomigration
+go get github.com/openframebox/gomigration
 ```
 
 ## 🛠️ Usage
@@ -247,7 +249,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/ruangdeveloper/gomigration"
+	"github.com/openframebox/gomigration"
 	"your_app/migrations"
 )
 
@@ -305,5 +307,3 @@ func main() {
 MIT License
 
 ---
-
-Made with ❤️ by [Ruang Developer](https://github.com/ruangdeveloper)
