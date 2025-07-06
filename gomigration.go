@@ -43,10 +43,6 @@ func New(config *Config) (*GoMigration, error) {
 		return nil, fmt.Errorf("invalid migration table name: %w", err)
 	}
 
-	if !migrationDirExists(config.MigrationFilesDir) {
-		return nil, fmt.Errorf("migration directory %q does not exist", config.MigrationFilesDir)
-	}
-
 	config.Driver.SetMigrationTableName(config.MigrationTableName)
 
 	return &GoMigration{
@@ -77,9 +73,19 @@ func (q *GoMigration) Register(migrations ...Migration) error {
 	return nil
 }
 
+// Set migration files directory.
+func (q *GoMigration) SetMigrationFilesDir(dir string) *GoMigration {
+	q.migrationFilesDir = dir
+	return q
+}
+
 // Create generates a new migration file using the given name.
 // The generated file includes a timestamp prefix and basic template content.
 func (q *GoMigration) Create(fileName string) error {
+	if !migrationDirExists(q.migrationFilesDir) {
+		return fmt.Errorf("migration directory %q does not exist", q.migrationFilesDir)
+	}
+
 	if fileName == "" {
 		return ErrMigrationNameNotProvided
 	}
