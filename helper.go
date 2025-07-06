@@ -90,7 +90,7 @@ func sanitizeMigrationName(name string) (string, error) {
 // sanitizeTableName validates the table name. Returns an error if it contains
 // invalid characters.
 func sanitizeTableName(name string) (string, error) {
-	valid := regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	valid := regexp.MustCompile(`^[a-zA-Z0-9_.]+$`)
 	if !valid.MatchString(name) {
 		return "", fmt.Errorf("invalid table name: %s", name)
 	}

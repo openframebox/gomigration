@@ -151,6 +151,12 @@ func TestGoMigration_List(t *testing.T) {
 	driver.AssertExpectations(t)
 }
 
+func TestSetMigrationFilesDir(t *testing.T) {
+	q := &GoMigration{}
+	q.SetMigrationFilesDir("migrations")
+	assert.Equal(t, "migrations", q.migrationFilesDir)
+}
+
 // dummyMigration is a simple implementation of the Migration interface for testing.
 type dummyMigration struct {
 	name string

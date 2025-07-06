@@ -102,6 +102,18 @@ if err != nil {
   list, err := q.List(context.Background())
   ```
 
+### 5. Set migration files directory before creating migration file
+
+If you want to set migration files directory before creating migration file, you can use `SetMigrationFilesDir` method. This is useful when you want to dynamically set the migration files directory, e.g. passing it as a command-line argument.
+
+```go
+q.SetMigrationFilesDir("migrations")
+q.Create("add_users_table")
+
+// or using chain
+q.SetMigrationFilesDir("migrations").Create("add_users_table")
+```
+
 ## 📁 Migration Interface
 
 Each migration must implement the following interface:
