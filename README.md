@@ -252,6 +252,27 @@ After setting up the CLI, you can run the following commands directly from the t
 
 These commands are built into the CLI, making it easy to perform common migration tasks without having to write custom code each time.
 
+### 3. Add Commands to Existing cobra.Command
+
+```go
+var rootCmd = &cobra.Command{
+    Use:   "migration",
+    Short: "This is your existing cobra.Command",
+    Run: func(cmd *cobra.Command, args []string) {
+        cmd.Help()
+    },
+}
+
+rootCmd.AddCommand(
+    cli.ListCommand(ctx),
+    cli.MigrateCommand(ctx),
+    cli.RollbackCommand(ctx),
+    cli.ResetCommand(ctx),
+    cli.CleanCommand(ctx),
+    cli.CreateCommand(ctx),
+)
+```
+
 ### Full Example
 
 ```go

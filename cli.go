@@ -32,7 +32,7 @@ func NewCli(config CliConfig) (*Cli, error) {
 	}, nil
 }
 
-func (c *Cli) Execute(ctx context.Context) error {
+func (c *Cli) ListCommand(ctx context.Context) *cobra.Command {
 	var listCmd = &cobra.Command{
 		Use:   "list",
 		Short: "List all migrations",
@@ -46,6 +46,10 @@ func (c *Cli) Execute(ctx context.Context) error {
 		},
 	}
 
+	return listCmd
+}
+
+func (c *Cli) MigrateCommand(ctx context.Context) *cobra.Command {
 	var migrateCmd = &cobra.Command{
 		Use:   "migrate",
 		Short: "Run all pending migrations",
@@ -78,6 +82,10 @@ func (c *Cli) Execute(ctx context.Context) error {
 
 	migrateCmd.Flags().BoolP("fresh", "f", false, "Run fresh migrations")
 
+	return migrateCmd
+}
+
+func (c *Cli) RollbackCommand(ctx context.Context) *cobra.Command {
 	var rollbackCmd = &cobra.Command{
 		Use:   "rollback",
 		Short: "Rollback the last migration",
@@ -108,6 +116,10 @@ func (c *Cli) Execute(ctx context.Context) error {
 
 	rollbackCmd.Flags().IntP("step", "s", 1, "Number of migrations to rollback")
 
+	return rollbackCmd
+}
+
+func (c *Cli) ResetCommand(ctx context.Context) *cobra.Command {
 	var resetCmd = &cobra.Command{
 		Use:   "reset",
 		Short: "Rollback all migrations and re-run all migrations",
@@ -119,6 +131,11 @@ func (c *Cli) Execute(ctx context.Context) error {
 			}
 		},
 	}
+
+	return resetCmd
+}
+
+func (c *Cli) CleanCommand(ctx context.Context) *cobra.Command {
 	var cleanCmd = &cobra.Command{
 		Use:   "clean",
 		Short: "Clean database (delete all tables)",
@@ -131,6 +148,10 @@ func (c *Cli) Execute(ctx context.Context) error {
 		},
 	}
 
+	return cleanCmd
+}
+
+func (c *Cli) CreateCommand(ctx context.Context) *cobra.Command {
 	var createCmd = &cobra.Command{
 		Use:   "create",
 		Short: "Create a new migration",
@@ -145,6 +166,10 @@ func (c *Cli) Execute(ctx context.Context) error {
 		},
 	}
 
+	return createCmd
+}
+
+func (c *Cli) Execute(ctx context.Context) error {
 	var rootCmd = &cobra.Command{
 		Use: c.cliName,
 		CompletionOptions: cobra.CompletionOptions{
@@ -157,12 +182,12 @@ func (c *Cli) Execute(ctx context.Context) error {
 	}
 
 	rootCmd.AddCommand(
-		listCmd,
-		migrateCmd,
-		rollbackCmd,
-		resetCmd,
-		cleanCmd,
-		createCmd,
+		c.ListCommand(ctx),
+		c.MigrateCommand(ctx),
+		c.RollbackCommand(ctx),
+		c.ResetCommand(ctx),
+		c.CleanCommand(ctx),
+		c.CreateCommand(ctx),
 	)
 
 	return rootCmd.Execute()
