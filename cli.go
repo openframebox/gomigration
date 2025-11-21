@@ -155,16 +155,22 @@ func (c *Cli) CreateCommand(ctx context.Context) *cobra.Command {
 	var createCmd = &cobra.Command{
 		Use:   "create",
 		Short: "Create a new migration",
-		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			migrationName := args[0]
-			err := c.migration.Create(migrationName)
+			dir, _ := cmd.Flags().GetString("dir")
+			name, _ := cmd.Flags().GetString("name")
+
+			err := c.migration.SetMigrationFilesDir(dir).Create(name)
 			if err != nil {
 				log.Println("Error creating migration:", err)
 				return
 			}
 		},
 	}
+
+	createCmd.Flags().StringP("name", "n", "", "name of the migration")
+	createCmd.Flags().StringP("dir", "d", "", "directory of the migration")
+	createCmd.MarkFlagRequired("name")
+	createCmd.MarkFlagRequired("dir")
 
 	return createCmd
 }
