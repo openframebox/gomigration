@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -121,11 +122,30 @@ func migrationNameToStructName(migrationName string) (string, error) {
 // getPackageNameFromMigrationDir returns the last segment of the migrationFilesDir,
 // which is used as the package name.
 func getPackageNameFromMigrationDir(migrationFilesDir string) string {
-	parts := strings.Split(migrationFilesDir, "/")
-	if len(parts) == 0 {
+	base := filepath.Base(migrationFilesDir)
+	if base == "." || base == string(filepath.Separator) {
 		return "migrations"
 	}
-	return parts[len(parts)-1]
+	return base
+}
+
+// chunkStrings splits items into consecutive batches of at most size, so
+// large sets of identifiers can be processed without exceeding statement or
+// query length limits.
+func chunkStrings(items []string, size int) [][]string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	var batches [][]string
+	for i := 0; i < len(items); i += size {
+		end := i + size
+		if end > len(items) {
+			end = len(items)
+		}
+		batches = append(batches, items[i:end])
+	}
+	return batches
 }
 
 // migrationFileTemplate generates a Go file template for a new migration

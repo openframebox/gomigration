@@ -17,8 +17,11 @@ func setupMockDBPostgres(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *PostgresDrive
 	assert.NoError(t, err)
 
 	driver := &PostgresDriver{
-		db:                 db,
-		migrationTableName: "migrations",
+		baseDriver: baseDriver{
+			db:                 db,
+			migrationTableName: "migrations",
+			dialect:            postgresDialect,
+		},
 	}
 
 	return db, mock, driver
@@ -40,7 +43,7 @@ func TestCreateMigrationsTablePostgresDriver(t *testing.T) {
 	db, mock, driver := setupMockDBPostgres(t)
 	defer db.Close()
 
-	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS migrations`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS`).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := driver.CreateMigrationsTable(context.Background())
 	assert.NoError(t, err)
@@ -55,6 +58,10 @@ func TestSetMigrationTableNamePostgresDriver(t *testing.T) {
 
 	driver.SetMigrationTableName("custom_migrations")
 	assert.Equal(t, "custom_migrations", driver.migrationTableName)
+
+	// Test invalid migration table name falls back to the default
+	driver.SetMigrationTableName("bad name; DROP TABLE users;")
+	assert.Equal(t, "migrations", driver.migrationTableName)
 }
 
 func TestGetExecutedMigrationsPostgresDriver(t *testing.T) {
@@ -65,7 +72,7 @@ func TestGetExecutedMigrationsPostgresDriver(t *testing.T) {
 		AddRow("migration_1", time.Now()).
 		AddRow("migration_2", time.Now())
 
-	mock.ExpectQuery(`SELECT name, executed_at FROM migrations ORDER BY name ASC;`).
+	mock.ExpectQuery(`SELECT name, executed_at FROM "migrations" ORDER BY name ASC`).
 		WillReturnRows(rows)
 
 	migrations, err := driver.GetExecutedMigrations(context.Background(), false)
@@ -95,6 +102,29 @@ func TestCleanDatabasePostgresDriver(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCleanDatabasePostgresDriverExcludesMigrationsTable(t *testing.T) {
+	db, mock, driver := setupMockDBPostgres(t)
+	defer db.Close()
+
+	tableRows := sqlmock.NewRows([]string{"tablename"}).
+		AddRow("table1").
+		AddRow("migrations")
+
+	mock.ExpectQuery(`SELECT tablename FROM pg_tables WHERE schemaname = 'public';`).
+		WillReturnRows(tableRows)
+
+	// Only "table1" should be dropped; "migrations" must be excluded.
+	mock.ExpectExec(`DROP TABLE IF EXISTS "table1" CASCADE;`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// The migrations table survives, but its history rows must be cleared.
+	mock.ExpectExec(`DELETE FROM "migrations"`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err := driver.CleanDatabase(context.Background())
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestApplyMigrationsPostgresDriver(t *testing.T) {
 	db, mock, driver := setupMockDBPostgres(t)
 	defer db.Close()
@@ -105,9 +135,19 @@ func TestApplyMigrationsPostgresDriver(t *testing.T) {
 		down: "DROP TABLE test;",
 	}
 
+	mock.ExpectExec(`SELECT pg_advisory_lock`).
+		WithArgs("gomigration:migrations").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectBegin()
 	mock.ExpectExec("CREATE TABLE test \\(id INT\\);").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO migrations`).WithArgs("migration1", sqlmock.AnyArg()).
+	mock.ExpectExec(`INSERT INTO`).WithArgs("migration1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).
+		WithArgs("gomigration:migrations").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := driver.ApplyMigrations(context.Background(), []Migration{mig}, nil, nil, nil)
 	assert.NoError(t, err)
@@ -124,47 +164,50 @@ func TestUnapplyMigrationsPostgresDriver(t *testing.T) {
 		down: "DROP TABLE test;",
 	}
 
+	mock.ExpectExec(`SELECT pg_advisory_lock`).
+		WithArgs("gomigration:migrations").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectBegin()
 	mock.ExpectExec(mig.down).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`DELETE FROM migrations WHERE name = \$1`).WithArgs(mig.name).
+	mock.ExpectExec(`DELETE FROM`).WithArgs(mig.name).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).
+		WithArgs("gomigration:migrations").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := driver.UnapplyMigrations(context.Background(), []Migration{mig}, nil, nil, nil)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestExecuteMigrationSQLPostgresDriver(t *testing.T) {
+func TestApplyMigrationsPostgresDriverRollsBackOnFailure(t *testing.T) {
 	db, mock, driver := setupMockDBPostgres(t)
 	defer db.Close()
 
-	mock.ExpectExec(`SOME SQL STATEMENT`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mig := &mockMigrationPostgresDriver{
+		name: "migration1",
+		up:   "CREATE TABLE test (id INT);",
+	}
 
-	err := driver.executeMigrationSQL(context.Background(), "SOME SQL STATEMENT")
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
+	mock.ExpectExec(`SELECT pg_advisory_lock`).
+		WithArgs("gomigration:migrations").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
-func TestInsertExecutedMigrationPostgresDriver(t *testing.T) {
-	db, mock, driver := setupMockDBPostgres(t)
-	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE TABLE test \\(id INT\\);").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO`).WithArgs("migration1", sqlmock.AnyArg()).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
 
-	mock.ExpectExec(`INSERT INTO migrations`).WithArgs("migration_name", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).
+		WithArgs("gomigration:migrations").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	err := driver.insertExecutedMigration(context.Background(), "migration_name", time.Now())
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestRemoveExecutedMigrationPostgresDriver(t *testing.T) {
-	db, mock, driver := setupMockDBPostgres(t)
-	defer db.Close()
-
-	mock.ExpectExec(`DELETE FROM migrations WHERE name = \$1`).WithArgs("migration_name").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err := driver.removeExecutedMigration(context.Background(), "migration_name")
-	assert.NoError(t, err)
+	err := driver.ApplyMigrations(context.Background(), []Migration{mig}, nil, nil, nil)
+	assert.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

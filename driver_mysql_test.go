@@ -17,8 +17,11 @@ func setupMockDBMySql(t *testing.T) (*sql.DB, sqlmock.Sqlmock, *MySqlDriver) {
 	assert.NoError(t, err)
 
 	driver := &MySqlDriver{
-		db:                 db,
-		migrationTableName: "migrations",
+		baseDriver: baseDriver{
+			db:                 db,
+			migrationTableName: "migrations",
+			dialect:            mysqlDialect,
+		},
 	}
 
 	return db, mock, driver
@@ -42,7 +45,7 @@ func TestCreateMigrationsTableMySqlDriver(t *testing.T) {
 	defer db.Close()
 
 	// Simulate a successful table creation
-	mock.ExpectExec("CREATE TABLE IF NOT EXISTS migrations").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("CREATE TABLE IF NOT EXISTS").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Call CreateMigrationsTable
 	err := driver.CreateMigrationsTable(context.Background())
@@ -59,6 +62,10 @@ func TestSetMigrationTableNameMySqlDriver(t *testing.T) {
 	// Test custom migration table name
 	driver.SetMigrationTableName("custom_migrations")
 	assert.Equal(t, "custom_migrations", driver.migrationTableName)
+
+	// Test invalid migration table name falls back to the default
+	driver.SetMigrationTableName("bad name; DROP TABLE users;")
+	assert.Equal(t, "migrations", driver.migrationTableName)
 }
 
 func TestGetExecutedMigrations(t *testing.T) {
@@ -71,7 +78,7 @@ func TestGetExecutedMigrations(t *testing.T) {
 		AddRow("migration_1", time.Now()).
 		AddRow("migration_2", time.Now())
 
-	mock.ExpectQuery("SELECT name, executed_at FROM migrations").
+	mock.ExpectQuery("SELECT name, executed_at FROM").
 		WillReturnRows(rows)
 
 	// Call GetExecutedMigrations
@@ -115,6 +122,35 @@ func TestCleanDatabaseMySqlDriver(t *testing.T) {
 	assert.NoError(t, err, "there were unfulfilled expectations")
 }
 
+func TestCleanDatabaseMySqlDriverExcludesMigrationsTable(t *testing.T) {
+	db, mock, driver := setupMockDBMySql(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	mock.ExpectExec(`SET FOREIGN_KEY_CHECKS = 0;`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectQuery(`SELECT table_name FROM information_schema\.tables WHERE table_schema = DATABASE\(\);`).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"table_name"}).
+				AddRow("users").
+				AddRow("migrations"),
+		)
+
+	// Only "users" should be dropped; "migrations" must be excluded.
+	mock.ExpectExec(`DROP TABLE ` + "`users`;").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	// The migrations table survives, but its history rows must be cleared.
+	mock.ExpectExec(`DELETE FROM ` + "`migrations`").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	mock.ExpectExec(`SET FOREIGN_KEY_CHECKS = 1;`).WillReturnResult(sqlmock.NewResult(0, 0))
+
+	err := driver.CleanDatabase(ctx)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestApplyMigrationsMySqlDriver(t *testing.T) {
 	db, mock, driver := setupMockDBMySql(t)
 	defer db.Close()
@@ -125,9 +161,19 @@ func TestApplyMigrationsMySqlDriver(t *testing.T) {
 		down: "DROP TABLE test;",
 	}
 
+	mock.ExpectQuery(`SELECT GET_LOCK\(\?, \?\)`).
+		WithArgs("gomigration:migrations", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(1))
+
+	mock.ExpectBegin()
 	mock.ExpectExec("CREATE TABLE test \\(id INT\\);").WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO migrations`).WithArgs("migration1", sqlmock.AnyArg()).
+	mock.ExpectExec(`INSERT INTO`).WithArgs("migration1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectQuery(`SELECT RELEASE_LOCK\(\?\)`).
+		WithArgs("gomigration:migrations").
+		WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(1))
 
 	err := driver.ApplyMigrations(context.Background(), []Migration{mig}, nil, nil, nil)
 	assert.NoError(t, err)
@@ -144,47 +190,67 @@ func TestUnapplyMigrationsMySqlDriver(t *testing.T) {
 		down: "DROP TABLE test;",
 	}
 
+	mock.ExpectQuery(`SELECT GET_LOCK\(\?, \?\)`).
+		WithArgs("gomigration:migrations", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(1))
+
+	mock.ExpectBegin()
 	mock.ExpectExec(mig.down).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`DELETE FROM migrations WHERE name = ?`).WithArgs(mig.name).
+	mock.ExpectExec(`DELETE FROM`).WithArgs(mig.name).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectQuery(`SELECT RELEASE_LOCK\(\?\)`).
+		WithArgs("gomigration:migrations").
+		WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(1))
 
 	err := driver.UnapplyMigrations(context.Background(), []Migration{mig}, nil, nil, nil)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestExecuteMigrationSQLMySqlDriver(t *testing.T) {
+func TestApplyMigrationsMySqlDriverRollsBackOnFailure(t *testing.T) {
 	db, mock, driver := setupMockDBMySql(t)
 	defer db.Close()
 
-	mock.ExpectExec(`SOME SQL STATEMENT`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mig := &mockMigrationMySqlDriver{
+		name: "migration1",
+		up:   "CREATE TABLE test (id INT);",
+		down: "DROP TABLE test;",
+	}
 
-	err := driver.executeMigrationSQL(context.Background(), "SOME SQL STATEMENT")
-	assert.NoError(t, err)
+	mock.ExpectQuery(`SELECT GET_LOCK\(\?, \?\)`).
+		WithArgs("gomigration:migrations", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(1))
+
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE TABLE test \\(id INT\\);").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO`).WithArgs("migration1", sqlmock.AnyArg()).
+		WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	mock.ExpectQuery(`SELECT RELEASE_LOCK\(\?\)`).
+		WithArgs("gomigration:migrations").
+		WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(1))
+
+	err := driver.ApplyMigrations(context.Background(), []Migration{mig}, nil, nil, nil)
+	assert.Error(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestInsertExecutedMigrationMySqlDriver(t *testing.T) {
+func TestApplyMigrationsMySqlDriverLockTimeout(t *testing.T) {
 	db, mock, driver := setupMockDBMySql(t)
 	defer db.Close()
 
-	mock.ExpectExec(`INSERT INTO migrations`).WithArgs("migration_name", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mig := &mockMigrationMySqlDriver{name: "migration1", up: "CREATE TABLE test (id INT);"}
 
-	err := driver.insertExecutedMigration(context.Background(), "migration_name", time.Now())
-	assert.NoError(t, err)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
+	mock.ExpectQuery(`SELECT GET_LOCK\(\?, \?\)`).
+		WithArgs("gomigration:migrations", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"result"}).AddRow(0))
 
-func TestRemoveExecutedMigrationMySqlDriver(t *testing.T) {
-	db, mock, driver := setupMockDBMySql(t)
-	defer db.Close()
-
-	mock.ExpectExec(`DELETE FROM migrations WHERE name = ?`).WithArgs("migration_name").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err := driver.removeExecutedMigration(context.Background(), "migration_name")
-	assert.NoError(t, err)
+	err := driver.ApplyMigrations(context.Background(), []Migration{mig}, nil, nil, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
