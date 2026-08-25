@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -96,7 +97,7 @@ func (q *GoMigration) Create(fileName string) error {
 	}
 
 	migrationName = fmt.Sprintf("%s_%s", time.Now().Format("20060102150405"), migrationName)
-	migrationFileName := fmt.Sprintf("%s/%s.go", q.migrationFilesDir, migrationName)
+	migrationFileName := filepath.Join(q.migrationFilesDir, migrationName+".go")
 
 	if fileExists(migrationFileName) {
 		return ErrMigrationFileAlreadyExists
@@ -142,48 +143,48 @@ func (q *GoMigration) Migrate(ctx context.Context) error {
 	}
 
 	if len(migrationsToApply) == 0 {
-		log.Println("✅ No migrations to run")
+		log.Println("no migrations to run")
 		return nil
 	}
 
-	log.Printf("🚀 Applying %d migration(s)...\n", len(migrationsToApply))
+	log.Printf("applying %d migration(s)...\n", len(migrationsToApply))
 
 	return q.driver.ApplyMigrations(
 		ctx,
 		migrationsToApply,
 		func(m *Migration) {
-			log.Printf("📦 Migrating: %s\n", (*m).Name())
+			log.Printf("migrating: %s\n", (*m).Name())
 			if q.debugSql {
-				log.Println("🧾 Running SQL:")
+				log.Println("running SQL:")
 				fmt.Println("================================================")
 				fmt.Println((*m).UpScript())
 				fmt.Println("================================================")
 			}
 		},
 		func(m *Migration) {
-			log.Printf("✅ Migrated: %s\n", (*m).Name())
+			log.Printf("migrated: %s\n", (*m).Name())
 		},
 		func(m *Migration, err error) {
-			log.Printf("❌ Migration failed: %s - %s\n", (*m).Name(), err)
+			log.Printf("migration failed: %s - %s\n", (*m).Name(), err)
 		},
 	)
 }
 
 // Fresh wipes the database clean and reapplies all registered migrations from scratch.
 func (q *GoMigration) Fresh(ctx context.Context) error {
-	log.Println("🧹 Cleaning database...")
+	log.Println("cleaning database...")
 
 	if err := q.driver.CleanDatabase(ctx); err != nil {
 		return fmt.Errorf("failed to clean database: %w", err)
 	}
 
-	log.Println("🚀 Running fresh migrations...")
+	log.Println("running fresh migrations...")
 
 	if err := q.Migrate(ctx); err != nil {
 		return fmt.Errorf("failed to run migrations after cleaning: %w", err)
 	}
 
-	log.Println("✅ Fresh migration completed successfully")
+	log.Println("fresh migration completed successfully")
 	return nil
 }
 
@@ -195,13 +196,13 @@ func (q *GoMigration) Reset(ctx context.Context) error {
 	}
 
 	if len(executedMigrations) == 0 {
-		log.Println("✅ No migrations to reset")
+		log.Println("no migrations to reset")
 		return nil
 	}
 
-	log.Printf("🔁 Resetting %d executed migration(s)...\n", len(executedMigrations))
+	log.Printf("resetting %d executed migration(s)...\n", len(executedMigrations))
 
-	if err := q.Rollback(ctx, len(executedMigrations)); err != nil {
+	if err := q.rollback(ctx, executedMigrations, len(executedMigrations)); err != nil {
 		return fmt.Errorf("rollback failed during reset: %w", err)
 	}
 
@@ -209,7 +210,7 @@ func (q *GoMigration) Reset(ctx context.Context) error {
 		return fmt.Errorf("migration failed during reset: %w", err)
 	}
 
-	log.Println("✅ Migration reset completed successfully")
+	log.Println("migration reset completed successfully")
 	return nil
 }
 
@@ -224,8 +225,15 @@ func (q *GoMigration) Rollback(ctx context.Context, step int) error {
 		return err
 	}
 
+	return q.rollback(ctx, executedMigrations, step)
+}
+
+// rollback rolls back `step` migrations from an already-fetched, most-recent-first
+// list of executed migrations. It is shared by Rollback and Reset so Reset doesn't
+// need to fetch the executed migrations list a second time.
+func (q *GoMigration) rollback(ctx context.Context, executedMigrations []ExecutedMigration, step int) error {
 	if len(executedMigrations) == 0 {
-		log.Println("✅ No migrations to rollback")
+		log.Println("no migrations to rollback")
 		return nil
 	}
 
@@ -244,47 +252,47 @@ func (q *GoMigration) Rollback(ctx context.Context, step int) error {
 		if migration, found := migrationMap[executedMigration.Name]; found {
 			migrationsToRollback = append(migrationsToRollback, migration)
 		} else {
-			log.Printf("⚠️  Migration not found for: %s\n", executedMigration.Name)
+			log.Printf("migration not found for: %s\n", executedMigration.Name)
 		}
 	}
 
 	if len(migrationsToRollback) == 0 {
-		log.Println("✅ No migrations to rollback")
+		log.Println("no migrations to rollback")
 		return nil
 	}
 
-	log.Printf("🔁 Rolling back %d migration(s)...\n", len(migrationsToRollback))
+	log.Printf("rolling back %d migration(s)...\n", len(migrationsToRollback))
 
 	return q.driver.UnapplyMigrations(
 		ctx,
 		migrationsToRollback,
 		func(m *Migration) {
-			log.Printf("🔄 Rolling back: %s\n", (*m).Name())
+			log.Printf("rolling back: %s\n", (*m).Name())
 			if q.debugSql {
-				log.Println("🧾 Running SQL:")
+				log.Println("running SQL:")
 				fmt.Println("================================================")
 				fmt.Println((*m).DownScript())
 				fmt.Println("================================================")
 			}
 		},
 		func(m *Migration) {
-			log.Printf("✅ Rolled back: %s\n", (*m).Name())
+			log.Printf("rolled back: %s\n", (*m).Name())
 		},
 		func(m *Migration, err error) {
-			log.Printf("❌ Rollback failed: %s - %s\n", (*m).Name(), err)
+			log.Printf("rollback failed: %s - %s\n", (*m).Name(), err)
 		},
 	)
 }
 
 // Clean drops all database tables and objects managed by the migration system.
 func (q *GoMigration) Clean(ctx context.Context) error {
-	log.Println("🧹 Cleaning database...")
+	log.Println("cleaning database...")
 
 	if err := q.driver.CleanDatabase(ctx); err != nil {
 		return fmt.Errorf("failed to clean database: %w", err)
 	}
 
-	log.Println("✅ Database cleaned successfully")
+	log.Println("database cleaned successfully")
 	return nil
 }
 
